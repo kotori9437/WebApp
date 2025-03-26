@@ -3,104 +3,307 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>横スクロール型スケジュール管理カレンダー</title>
-    
-    <!-- FullCalendarのスクリプトをCDNから読み込む -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/index.global.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/6.1.8/resource-timeline.global.min.js"></script>
-    
+    <title>お昼ごはんマップ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script type="module">
+        // ===========================
+        // Firebase の設定と初期化
+        // ===========================
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.5.0/firebase-app.js";
+        import { getDatabase, ref, push, update, onValue } from "https://www.gstatic.com/firebasejs/11.5.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBFiKTDqbBxpTJKtrD3LuktEteFkvnOBAY",
+            authDomain: "mapdata-b932a.firebaseapp.com",
+            projectId: "mapdata-b932a",
+            storageBucket: "mapdata-b932a.firebasestorage.app",
+            messagingSenderId: "953838196032",
+            appId: "1:953838196032:web:96d44b0332d3a93ccb96a5",
+            measurementId: "G-KGKQNMTHHV",
+            databaseURL: "https://mapdata-b932a-default-rtdb.firebaseio.com/"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // ===========================
+        // ユーザー識別 (navigator.userAgent)
+        // ===========================
+        const userId = navigator.userAgent;
+
+        // ===========================
+        // DOMが読み込まれた後の処理
+        // ===========================
+        document.addEventListener("DOMContentLoaded", () => {
+            const map = L.map('map').setView([35.6586068, 139.7131093], 17);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            const markersRef = ref(db, 'markers/');
+            let editing = false; // 編集モードのフラグ
+            let editMarker = null; // 編集中のマーカー
+
+            // ===========================
+            // Firebaseからマーカーを取得して地図に表示
+            // ===========================
+            onValue(markersRef, (snapshot) => {
+                snapshot.forEach((childSnapshot) => {
+                    const data = childSnapshot.val();
+                    const marker = L.marker([data.lat, data.lng]).addTo(map)
+                        .bindPopup(`<b>店舗名:</b> ${data.storeName}<br><b>タイプ:</b> ${data.type}<br><b>おすすめメニュー:</b> ${data.menu}<br><b>金額:</b> ${data.price}<br><b>コメント:</b> ${data.comment}`);
+                    
+                    marker.on('click', () => {
+                        // マーカークリック時に店舗情報を表示
+                        const infoBox = document.getElementById("storeInfoBox");
+                        infoBox.innerHTML = `
+                            <h3>店舗情報</h3>
+                            <p>店舗名: ${data.storeName}</p>
+                            <p>タイプ: ${data.type}</p>
+                            <p>おすすめメニュー: ${data.menu}</p>
+                            <p>金額: ${data.price}</p>
+                            <p>コメント: ${data.comment}</p>
+                            <button onclick="favoriteStore('${childSnapshot.key}')">お気に入り</button>
+                            <button onclick="tryStore('${childSnapshot.key}')">実食！</button>
+                            <button onclick="closeStoreInfoBox()">×</button>
+                        `;
+                        // オーバーレイに店舗情報表示
+                        infoBox.style.display = 'block';
+                    });
+                });
+            });
+
+            // ===========================
+            // 新規マーカーをクリックで追加
+            // ===========================
+            let newMarkers = [];
+            map.on('click', function(e) {
+                if (!editing) return; // 編集モードでない場合はマップピン設置不可
+
+                let lat = e.latlng.lat;
+                let lng = e.latlng.lng;
+
+                // オーバーレイで店舗情報登録フォームを表示
+                const overlay = document.getElementById("storeFormOverlay");
+                overlay.style.display = 'block';
+
+                // 編集モードのときのみマーカー設置
+                if (editMarker) {
+                    editMarker.setLatLng([lat, lng]);
+                } else {
+                    editMarker = L.marker([lat, lng]).addTo(map);
+                }
+
+                document.getElementById("saveStoreInfo").onclick = function() {
+                    const storeName = document.getElementById("storeName").value;
+                    const type = document.getElementById("type").value;
+                    const menu = document.getElementById("menu").value;
+                    const price = document.getElementById("price").value;
+                    const comment = document.getElementById("comment").value;
+
+                    // 保存するデータ
+                    const storeData = {
+                        lat: lat,
+                        lng: lng,
+                        storeName: storeName,
+                        type: type,
+                        menu: menu,
+                        price: price,
+                        comment: comment,
+                        userId: userId
+                    };
+
+                    if (editMarker) {
+                        update(ref(db, 'markers/' + editMarker._leaflet_id), storeData); // 編集の場合、更新
+                    } else {
+                        push(markersRef, storeData); // 新規追加
+                    }
+
+                    alert("店舗情報が保存されました！");
+
+                    // オーバーレイを非表示にする
+                    overlay.style.display = 'none';
+                    editing = false; // 編集モード終了
+                    editMarker = null; // 編集中マーカーをリセット
+                };
+            });
+
+            // ===========================
+            // 編集ボタンの設定
+            // ===========================
+            document.getElementById("editButton").onclick = function() {
+                editing = !editing; // 編集モード切替
+                if (editing) {
+                    this.innerText = "編集終了"; // ボタンテキスト変更
+                } else {
+                    this.innerText = "編集開始";
+                }
+            };
+
+            // ===========================
+            // お気に入り/実食ボタンの処理
+            // ===========================
+            window.favoriteStore = function(markerId) {
+                const markerRef = ref(db, 'markers/' + markerId + '/favorites');
+                push(markerRef, userId);
+            };
+
+            window.tryStore = function(markerId) {
+                const markerRef = ref(db, 'markers/' + markerId + '/tried');
+                push(markerRef, userId);
+            };
+
+            // 店舗情報を閉じる
+            window.closeStoreInfoBox = function() {
+                const infoBox = document.getElementById("storeInfoBox");
+                infoBox.style.display = 'none';
+            };
+        });
+    </script>
     <style>
-        /* 全体のフォントやテキストの配置設定 */
         body {
-            font-family: Arial, sans-serif; /* フォントをArial、もしくはサンセリフ体に設定 */
-            text-align: center; /* ページ内のテキストを中央寄せに設定 */
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        
-        /* カレンダーを横スクロール可能にする */
-        .calendar-container {
-            overflow-x: auto; /* 横スクロールを可能にする */
-            white-space: nowrap; /* 横スクロール時にテキストが改行されないようにする */
-            width: 100%; /* カレンダーのコンテナが親要素の幅に合わせて広がる */
-            max-width: 100vw; /* 最大幅を画面の幅（ビューポートの幅）に設定 */
-            padding: 20px 0; /* 上下に20pxの余白を追加 */
+
+        header {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            font-size: 24px;
         }
-        
-        /* カレンダーの表示領域の最小幅設定 */
-        #calendar {
-            display: inline-block; /* カレンダーをインラインブロック要素に設定（横並びに表示） */
-            min-width: 1100px; /* カレンダーの最小幅を1100pxに設定 */
+
+        nav {
+            display: flex;
+            justify-content: center;
+            background-color: #f2f2f2;
+            padding: 10px;
         }
-        
-        /* 時間スロットの幅を小さくする */
-        .fc-timegrid-slot {
-            min-width: 100px; /* 1時間あたりの時間スロットの最小幅を100pxに設定 */
+
+        nav a {
+            margin: 0 15px;
+            text-decoration: none;
+            color: #333;
+            font-weight: bold;
         }
-        
-        /* 入力フィールドとボタンのデザイン設定 */
-        input, button {
-            margin: 5px; /* 入力フィールドとボタンの周りに5pxの余白を追加 */
-            padding: 10px; /* 入力フィールドとボタンに10pxの内側余白を追加 */
+
+        .container {
+            padding: 20px;
+            text-align: center;
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+        }
+
+        footer {
+            background-color: #4CAF50;
+            color: white;
+            text-align: center;
+            padding: 10px 0;
+            margin-top: 20px;
+        }
+
+        button {
+            margin-top: 10px;
+            padding: 10px 15px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 5px;
+        }
+
+        /* オーバーレイのスタイル */
+        #storeFormOverlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            width: 60%;
+            display: none;
+            z-index: 9999; /* 最前面に表示 */
+        }
+
+        #storeFormOverlay input, #storeFormOverlay select, #storeFormOverlay textarea {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+
+        #storeFormOverlay button {
+            width: 100%;
+            padding: 10px;
+        }
+
+        /* 店舗情報表示のスタイル */
+        #storeInfoBox {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            width: 60%;
+            display: none;
+            z-index: 9999; /* 最前面に表示 */
+        }
+
+        #storeInfoBox button {
+            background-color: red;
         }
     </style>
-    
 </head>
 <body>
-    <h2>横スクロール型スケジュール管理カレンダー</h2>
-    
-    <!-- イベント追加用の入力フォーム -->
-    <input type="text" id="eventTitle" placeholder="イベント名">
-    <input type="date" id="eventDate">
-    <button onclick="addEvent()">追加</button>
-    
-    <!-- カレンダー表示部分 -->
-    <div class="calendar-container">
-        <div id="calendar"></div>
-    </div>
-    
-    <script>
-        // ページの読み込みが完了したらカレンダーを初期化
-        document.addEventListener('DOMContentLoaded', function() {
-            var calendarEl = document.getElementById('calendar'); // カレンダーを表示する要素を取得
-            
-            // FullCalendarのインスタンスを作成
-            window.calendar = new FullCalendar.Calendar(calendarEl, {
-                initialView: 'timeGridWeek', // 初期表示を1日のタイムグリッドに設定
-                
-                // カレンダー上部のツールバーの設定
-                headerToolbar: {
-                    left: 'prev,next today', // 左側に「前」「次」「今日」ボタン
-                    center: 'title', // 中央にタイトル（年月）
-                    right: 'timeGridDay,timeGridWeek' // 右側に「1日表示」「週表示」切り替えボタン
-                },
-                
-                slotDuration: '06:00:00', // 1マスの時間間隔を6時間ごとに設定
-                slotLabelInterval: '06:00', // ラベルの表示間隔を6時間ごとに設定
-                
-                events: [] // 初期イベントは空
-            });
-            
-            // カレンダーを表示
-            calendar.render();
-        });
+    <header>お昼ごはんマップ</header>
 
-        // イベント追加処理
-        function addEvent() {
-            var title = document.getElementById('eventTitle').value; // イベント名を取得
-            var date = document.getElementById('eventDate').value; // 日付を取得
-            
-            if (title && date) { // イベント名と日付が入力されている場合のみ追加
-                window.calendar.addEvent({
-                    title: title,
-                    start: date
-                });
-                
-                // 入力フィールドをクリア
-                document.getElementById('eventTitle').value = "";
-                document.getElementById('eventDate').value = "";
-            } else {
-                alert("イベント名と日付を入力してください。"); // 未入力時のアラート
-            }
-        }
-    </script>
+    <nav>
+        <a href="#">ホーム</a>
+        <a href="#">検索</a>
+        <a href="#">データ更新</a>
+    </nav>
+
+    <div class="container">
+        <h2>会社付近のお昼ごはんマップ</h2>
+        <button id="editButton">編集開始</button>
+        <p>地図をクリックするとマーカーを設置できます。</p>
+        <div id="map"></div>
+    </div>
+
+    <footer>
+        マップデータ: Leaflet
+    </footer>
+
+    <!-- 店舗情報登録フォーム -->
+    <div id="storeFormOverlay">
+        <h3>店舗情報の登録</h3>
+        <input type="text" id="storeName" placeholder="店舗名">
+        <select id="type">
+            <option value="キッチンカー">キッチンカー</option>
+            <option value="お弁当">お弁当</option>
+            <option value="ラーメン">ラーメン</option>
+        </select>
+        <input type="text" id="menu" placeholder="おすすめメニュー">
+        <input type="number" id="price" placeholder="金額">
+        <textarea id="comment" placeholder="その他コメント"></textarea>
+        <button id="saveStoreInfo">保存</button>
+    </div>
+
+    <!-- 店舗情報表示 -->
+    <div id="storeInfoBox"></div>
+
+    <!-- Leaflet.jsを読み込む -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 </body>
 </html>
