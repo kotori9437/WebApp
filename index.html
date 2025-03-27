@@ -6,11 +6,12 @@
     <title>お昼ごはんマップ</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script type="module">
-        // ===========================
+
         // Firebase の設定と初期化
-        // ===========================
+
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.5.0/firebase-app.js";
         import { getDatabase, ref, push, update, onValue } from "https://www.gstatic.com/firebasejs/11.5.0/firebase-database.js";
+        import { remove } from "https://www.gstatic.com/firebasejs/11.5.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBFiKTDqbBxpTJKtrD3LuktEteFkvnOBAY",
@@ -26,14 +27,10 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // ===========================
         // ユーザー識別 (navigator.userAgent)
-        // ===========================
         const userId = navigator.userAgent;
 
-        // ===========================
         // DOMが読み込まれた後の処理
-        // ===========================
         document.addEventListener("DOMContentLoaded", () => {
             const map = L.map('map').setView([35.6586068, 139.7131093], 17);
 
@@ -41,42 +38,66 @@
                 attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             }).addTo(map);
 
+
+            const technoIcon = L.icon({
+                iconUrl: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png',
+                iconSize: [32, 32],
+                iconAnchor: [16, 32],
+                popupAnchor: [0, -32]
+            });
+
+            const technoMarker = L.marker([35.6586068, 139.7131093], { icon: technoIcon })
+                .addTo(map)
+                .bindPopup("テクノデジタル</b>");
+
             const markersRef = ref(db, 'markers/');
             let editing = false; // 編集モードのフラグ
             let editMarker = null; // 編集中のマーカー
 
-            // ===========================
             // Firebaseからマーカーを取得して地図に表示
-            // ===========================
             onValue(markersRef, (snapshot) => {
                 snapshot.forEach((childSnapshot) => {
                     const data = childSnapshot.val();
                     const marker = L.marker([data.lat, data.lng]).addTo(map)
                         .bindPopup(`<b>店舗名:</b> ${data.storeName}<br><b>タイプ:</b> ${data.type}<br><b>おすすめメニュー:</b> ${data.menu}<br><b>金額:</b> ${data.price}<br><b>コメント:</b> ${data.comment}`);
-                    
-                    marker.on('click', () => {
-                        // マーカークリック時に店舗情報を表示
-                        const infoBox = document.getElementById("storeInfoBox");
-                        infoBox.innerHTML = `
-                            <h3>店舗情報</h3>
-                            <p>店舗名: ${data.storeName}</p>
-                            <p>タイプ: ${data.type}</p>
-                            <p>おすすめメニュー: ${data.menu}</p>
-                            <p>金額: ${data.price}</p>
-                            <p>コメント: ${data.comment}</p>
-                            <button onclick="favoriteStore('${childSnapshot.key}')">お気に入り</button>
-                            <button onclick="tryStore('${childSnapshot.key}')">実食！</button>
-                            <button onclick="closeStoreInfoBox()">×</button>
-                        `;
-                        // オーバーレイに店舗情報表示
-                        infoBox.style.display = 'block';
-                    });
+
+                    marker._firebaseKey = childSnapshot.key; // Firebase のキーをマーカーに紐づけ
+
+
+                        marker.on('click', () => {
+                            const infoBox = document.getElementById("storeInfoBox");
+
+                            // お気に入り数・実食数を取得
+                            const favRef = ref(db, 'markers/' + childSnapshot.key + '/favorites');
+                            const tryRef = ref(db, 'markers/' + childSnapshot.key + '/tried');
+
+                            onValue(favRef, (favSnapshot) => {
+                                const favoriteCount = favSnapshot.size; // お気に入り数を取得
+                                onValue(tryRef, (trySnapshot) => {
+                                    const tryCount = trySnapshot.size; // 実食数を取得
+
+                                    // 店舗情報を更新
+                                    infoBox.innerHTML = `
+                                        <h3>店舗情報</h3>
+                                        <p>店舗名: ${data.storeName}</p>
+                                        <p>タイプ: ${data.type}</p>
+                                        <p>おすすめメニュー: ${data.menu}</p>
+                                        <p>金額: ${data.price}</p>
+                                        <p>コメント: ${data.comment}</p>
+                                        <button onclick="favoriteStore('${childSnapshot.key}')">お気に入り (${favoriteCount})</button>
+                                        <button onclick="tryStore('${childSnapshot.key}')">実食！ (${tryCount})</button>
+                                        <button onclick="closeStoreInfoBox()">×</button>
+                                        ${editing ? `<button onclick="deleteMarker('${childSnapshot.key}')">削除</button>` : ""}
+                                    `;
+                                    infoBox.style.display = 'block';
+                                });
+                            });
+                        });
+
                 });
             });
 
-            // ===========================
             // 新規マーカーをクリックで追加
-            // ===========================
             let newMarkers = [];
             map.on('click', function(e) {
                 if (!editing) return; // 編集モードでない場合はマップピン設置不可
@@ -129,9 +150,7 @@
                 };
             });
 
-            // ===========================
             // 編集ボタンの設定
-            // ===========================
             document.getElementById("editButton").onclick = function() {
                 editing = !editing; // 編集モード切替
                 if (editing) {
@@ -141,18 +160,52 @@
                 }
             };
 
-            // ===========================
             // お気に入り/実食ボタンの処理
-            // ===========================
             window.favoriteStore = function(markerId) {
-                const markerRef = ref(db, 'markers/' + markerId + '/favorites');
-                push(markerRef, userId);
+                const markerRef = ref(db, 'markers/' + markerId + '/favorites/' + userId);
+                update(markerRef, { liked: true });
             };
 
             window.tryStore = function(markerId) {
-                const markerRef = ref(db, 'markers/' + markerId + '/tried');
-                push(markerRef, userId);
+                const markerRef = ref(db, 'markers/' + markerId + '/tried/' + userId);
+                update(markerRef, { tried: true });
             };
+
+
+
+            window.deleteMarker = function(markerId) {
+                if (!editing) {
+                    alert("編集モードでのみ削除できます。");
+                    return;
+                }
+
+                if (confirm("このマーカーを削除しますか？")) {
+                    // Firebase からデータを削除
+                    const markerRef = ref(db, 'markers/' + markerId);
+                    remove(markerRef) // データを削除
+
+                    .then(() => {
+                        // マップ上のマーカーを削除
+                        map.eachLayer((layer) => {
+                            if (layer instanceof L.Marker && layer._firebaseKey === markerId) {
+                                map.removeLayer(layer);
+                            }
+                        });
+
+                        alert("マーカーを削除しました。");
+                        closeStoreInfoBox();
+                    })
+                    .catch((error) => {
+                        console.error("削除に失敗しました: ", error);
+                        alert("マーカーの削除に失敗しました。");
+                    });
+                }
+            };
+
+
+
+
+
 
             // 店舗情報を閉じる
             window.closeStoreInfoBox = function() {
@@ -268,16 +321,12 @@
 <body>
     <header>お昼ごはんマップ</header>
 
-    <nav>
-        <a href="#">ホーム</a>
-        <a href="#">検索</a>
-        <a href="#">データ更新</a>
-    </nav>
+
 
     <div class="container">
         <h2>会社付近のお昼ごはんマップ</h2>
         <button id="editButton">編集開始</button>
-        <p>地図をクリックするとマーカーを設置できます。</p>
+        <p>編集中は、地図をクリックすることでマーカーを設置できます。</p>
         <div id="map"></div>
     </div>
 
@@ -291,8 +340,15 @@
         <input type="text" id="storeName" placeholder="店舗名">
         <select id="type">
             <option value="キッチンカー">キッチンカー</option>
-            <option value="お弁当">お弁当</option>
+            <option value="ファストフード">ファストフード</option>
             <option value="ラーメン">ラーメン</option>
+            <option value="カフェ">カフェ</option>
+            <option value="定食屋">定食屋</option>
+            <option value="ファミレス">ファミレス</option>
+            <option value="お弁当">お弁当</option>
+            <option value="麵系">麺系</option>
+            <option value="ごはん系">ごはん系</option>
+            <option value="その他">その他</option>
         </select>
         <input type="text" id="menu" placeholder="おすすめメニュー">
         <input type="number" id="price" placeholder="金額">
